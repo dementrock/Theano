@@ -508,6 +508,9 @@ class Elemwise(OpenMPOp):
         self.nfunc_spec = nfunc_spec
         if nfunc_spec:
             self.nfunc = getattr(numpy, nfunc_spec[0])
+        elif scalar_op.nin > 0 and scalar_op.nin < 32:
+            self.ufunc = numpy.frompyfunc(scalar_op.impl, scalar_op.nin,
+                                          scalar_op.nout)
 
         # precompute the hash of this node
         self._rehash()
