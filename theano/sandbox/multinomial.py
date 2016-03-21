@@ -16,6 +16,7 @@ if cuda_available:
 
 
 class MultinomialFromUniform(Op):
+    # TODO : need description for parameter 'odtype'
     """
     Converts samples from a uniform into sample from a multinomial.
 
@@ -79,12 +80,12 @@ class MultinomialFromUniform(Op):
         return """
         if (PyArray_NDIM(%(pvals)s) != 2)
         {
-            PyErr_Format(PyExc_TypeError, "pvals wrong rank");
+            PyErr_Format(PyExc_TypeError, "pvals ndim should be 2");
             %(fail)s;
         }
         if (PyArray_NDIM(%(unis)s) != 1)
         {
-            PyErr_Format(PyExc_TypeError, "unis wrong rank");
+            PyErr_Format(PyExc_TypeError, "unis ndim should be 2");
             %(fail)s;
         }
 
@@ -197,7 +198,8 @@ class MultinomialFromUniform(Op):
 
 class MultinomialWOReplacementFromUniform(MultinomialFromUniform):
     """
-    Converts samples from a uniform into sample (without replacement) from a multinomial.
+    Converts samples from a uniform into sample (without replacement) from a
+    multinomial.
 
     """
 
@@ -215,6 +217,131 @@ class MultinomialWOReplacementFromUniform(MultinomialFromUniform):
         out = T.tensor(dtype=odtype, broadcastable=pvals.type.broadcastable)
         return Apply(self, [pvals, unis, as_scalar(n)], [out])
 
+    def c_code_cache_version(self):
+        return (1,)
+
+    def c_code(self, node, name, ins, outs, sub):
+        (pvals, unis, n) = ins
+        (z,) = outs
+        if self.odtype == 'auto':
+            t = "NPY_INT64"
+        else:
+            t = theano.scalar.Scalar(self.odtype).dtype_specs()[1]
+            if t.startswith('theano_complex'):
+                t = t.replace('theano_complex', 'NPY_COMPLEX')
+            else:
+                t = t.upper()
+        fail = sub['fail']
+        return """
+        // create a copy of pvals matrix
+        PyArrayObject* pvals_copy = NULL;
+
+        if (PyArray_NDIM(%(pvals)s) != 2)
+        {
+            PyErr_Format(PyExc_TypeError, "pvals ndim should be 2");
+            %(fail)s;
+        }
+        if (PyArray_NDIM(%(unis)s) != 1)
+        {
+            PyErr_Format(PyExc_TypeError, "unis ndim should be 2");
+            %(fail)s;
+        }
+
+        if ( %(n)s > (PyArray_DIMS(%(pvals)s)[1]) )
+        {
+            PyErr_Format(PyExc_ValueError, "Cannot sample without replacement n samples bigger than the size of the distribution.");
+            %(fail)s;
+        }
+
+        if (PyArray_DIMS(%(unis)s)[0] != (PyArray_DIMS(%(pvals)s)[0] * %(n)s))
+        {
+            PyErr_Format(PyExc_ValueError, "unis.shape[0] != pvals.shape[0] * n");
+            %(fail)s;
+        }
+
+        pvals_copy = (PyArrayObject*) PyArray_EMPTY(2,
+            PyArray_DIMS(%(pvals)s),
+            PyArray_TYPE(%(pvals)s),
+            0);
+
+        if (!pvals_copy)
+        {
+            PyErr_SetString(PyExc_MemoryError, "failed to alloc pvals_copy");
+            %(fail)s;
+        }
+        PyArray_CopyInto(pvals_copy, %(pvals)s);
+
+        if ((NULL == %(z)s)
+            || ((PyArray_DIMS(%(z)s))[0] != (PyArray_DIMS(%(pvals)s))[0])
+            || ((PyArray_DIMS(%(z)s))[1] != %(n)s)
+        )
+        {
+            Py_XDECREF(%(z)s);
+            npy_intp dims[2];
+            dims[0] = PyArray_DIMS(%(pvals)s)[0];
+            dims[1] = %(n)s;
+            %(z)s = (PyArrayObject*) PyArray_EMPTY(2,
+                dims,
+                %(t)s,
+                -1);
+            if (!%(z)s)
+            {
+                PyErr_SetString(PyExc_MemoryError, "failed to alloc z output");
+                %(fail)s;
+            }
+        }
+
+        { // NESTED SCOPE
+
+        const int nb_multi = PyArray_DIMS(%(pvals)s)[0];
+        const int nb_outcomes = PyArray_DIMS(%(pvals)s)[1];
+        const int n_samples = %(n)s;
+
+        //
+        // For each multinomial, loop over each possible outcome,
+        // and set selected pval to 0 after being selected
+        //
+        for (int c = 0; c < n_samples; ++c){
+            for (int n = 0; n < nb_multi; ++n)
+            {
+                double cummul = 0.;
+                const dtype_%(unis)s* unis_n = (dtype_%(unis)s*)PyArray_GETPTR1(%(unis)s, c*nb_multi + n);
+                dtype_%(z)s* z_nc = (dtype_%(z)s*)PyArray_GETPTR2(%(z)s, n, c);
+                for (int m = 0; m < nb_outcomes; ++m)
+                {
+                    dtype_%(pvals)s* pvals_nm = (dtype_%(pvals)s*)PyArray_GETPTR2(pvals_copy, n, m);
+                    cummul += *pvals_nm;
+                    if (cummul > *unis_n)
+                    {
+                        *z_nc = m;
+                        // renormalize the nth row of pvals, reuse (cummul-*pvals_nm) to initialize the sum
+                        dtype_%(pvals)s sum = cummul - *pvals_nm;
+                        dtype_%(pvals)s* pvals_n = (dtype_%(pvals)s*)PyArray_GETPTR2(pvals_copy, n, m);
+                        *pvals_nm = 0.;
+                        for (int k = m; k < nb_outcomes; ++k)
+                        {
+                            sum = sum + *pvals_n;
+                            pvals_n++;
+                        }
+                        pvals_n = (dtype_%(pvals)s*)PyArray_GETPTR2(pvals_copy, n, 0);
+                        for (int k = 0; k < nb_outcomes; ++k)
+                        {
+                            *pvals_n = *pvals_n / sum;
+                            pvals_n++;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // delete pvals_copy
+        {
+            Py_XDECREF(pvals_copy);
+        }
+        } // END NESTED SCOPE
+        """ % locals()
+
     def perform(self, node, ins, outs):
         (pvals, unis, n_samples) = ins
         # make a copy so we do not overwrite the input
@@ -222,8 +349,8 @@ class MultinomialWOReplacementFromUniform(MultinomialFromUniform):
         (z,) = outs
 
         if n_samples > pvals.shape[1]:
-            raise ValueError("Cannot sample without replacement n samples bigger "
-                             "than the size of the distribution.")
+            raise ValueError("Cannot sample without replacement n samples "
+                             "bigger than the size of the distribution.")
 
         if unis.shape[0] != pvals.shape[0] * n_samples:
             raise ValueError("unis.shape[0] != pvals.shape[0] * n_samples",
@@ -233,7 +360,8 @@ class MultinomialWOReplacementFromUniform(MultinomialFromUniform):
             odtype = 'int64'
         else:
             odtype = self.odtype
-        if z[0] is None or not numpy.all(z[0].shape == [pvals.shape[0], n_samples]):
+        if (z[0] is None or
+                not numpy.all(z[0].shape == [pvals.shape[0], n_samples])):
             z[0] = -1 * numpy.ones((pvals.shape[0], n_samples), dtype=odtype)
 
         nb_multi = pvals.shape[0]
@@ -249,16 +377,11 @@ class MultinomialWOReplacementFromUniform(MultinomialFromUniform):
                     cummul += pvals[n, m]
                     if (cummul > unis_n):
                         z[0][n, c] = m
-                        # set to zero and re-normalize so that it's not selected again
+                        # set to zero and re-normalize so that it's not
+                        # selected again
                         pvals[n, m] = 0.
                         pvals[n] /= pvals[n].sum()
                         break
-
-    def c_code_cache_version(self):
-        return None
-
-    def c_code(self, node, name, ins, outs, sub):
-        raise NotImplementedError('no C implementation yet!')
 
 
 class GpuMultinomialFromUniform(MultinomialFromUniform, GpuOp):
@@ -443,6 +566,7 @@ class GpuMultinomialFromUniform(MultinomialFromUniform, GpuOp):
 
 @local_optimizer([MultinomialFromUniform])
 def local_gpu_multinomial(node):
+    # TODO : need description for function
     if type(node.op) is MultinomialFromUniform:
         if len(node.inputs) == 2:
             p, u = node.inputs

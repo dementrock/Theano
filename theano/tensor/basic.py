@@ -4,6 +4,7 @@ import sys
 import warnings
 
 import numpy
+from six import integer_types
 from six.moves import xrange
 import numbers
 
@@ -21,7 +22,6 @@ from theano.tensor.type import TensorType, values_eq_approx_always_true
 from theano.tensor.type_other import NoneConst
 from theano import scalar as scal
 from functools import partial
-from six import integer_types
 from theano import compile, printing
 from theano.printing import pprint, min_informative_str
 # For history
@@ -606,7 +606,7 @@ def get_scalar_constant_value(orig_v, elemwise=True,
             # to depend on passing it None)
             raise NotScalarConstantError()
 
-        if isinstance(v, (numpy.integer, int, float)):
+        if isinstance(v, (numpy.integer, integer_types, float)):
             return numpy.asarray(v)
 
         if isinstance(v, numpy.ndarray):
@@ -786,7 +786,7 @@ def tensor(*args, **kwargs):
 
 def _multi(*fns):
     def f2(f, *names):
-        if names and isinstance(names[0], int):
+        if names and isinstance(names[0], integer_types):
             if names == 1:
                 return f()
             else:
@@ -1290,7 +1290,7 @@ class MaxAndArgmax(Op):
     def make_node(self, x, axis=None):
         x = _as_tensor_variable(x)
 
-        if isinstance(axis, (int, numpy.integer)):
+        if isinstance(axis, (integer_types, numpy.integer)):
             axis = [int(axis)]
         elif isinstance(axis, numpy.ndarray) and axis.ndim == 0:
             axis = [int(axis)]
@@ -1307,7 +1307,7 @@ class MaxAndArgmax(Op):
             else:
                 assert (axis.dtype.startswith("int") or
                         axis.dtype.startswith("uint"))
-                if isinstance(axis.data, (int, numpy.integer)) or \
+                if isinstance(axis.data, (integer_types, numpy.integer)) or \
                    (isinstance(axis.data, numpy.ndarray) and
                         axis.data.ndim == 0):
                     axis = [int(axis.data)]
@@ -1355,7 +1355,7 @@ class MaxAndArgmax(Op):
         if axes is None:
             axes = tuple(range(x.ndim))
         else:
-            axes = tuple(axes)
+            axes = tuple(int(ax) for ax in axes)
         max[0] = theano._asarray(numpy.max(x, axes),
                                  dtype=node.outputs[0].dtype)
         # Numpy does not support multiple axes for argmax
@@ -1536,7 +1536,7 @@ def makeKeepDims(x, y, axis):
 
     if axis is None:
         axis = list(range(x.type.ndim))
-    elif isinstance(axis, (int, numpy.integer)):
+    elif isinstance(axis, (integer_types, numpy.integer)):
         axis = [axis]
     elif isinstance(axis, numpy.ndarray) and axis.ndim == 0:
         axis = [int(axis)]
@@ -1544,7 +1544,7 @@ def makeKeepDims(x, y, axis):
         axis = [int(a) for a in axis]
     newaxis = []
     for a in axis:
-        if not isinstance(a, int):
+        if not isinstance(a, integer_types):
             raise ValueError(
                 "keepdims option can be used only with constant axis")
         if a < 0:
@@ -3082,7 +3082,7 @@ def mean(input, axis=None, dtype=None, op=False, keepdims=False,
 
     if axis is None:
         axis = list(range(input.ndim))
-    elif isinstance(axis, (int, numpy.integer)):
+    elif isinstance(axis, (integer_types, numpy.integer)):
         axis = [axis]
     elif isinstance(axis, numpy.ndarray) and axis.ndim == 0:
         axis = [int(axis)]
@@ -3126,7 +3126,7 @@ def var(input, axis=None, keepdims=False):
     input_ndim = input.type.ndim
     if axis is None:
         axis = list(range(input_ndim))
-    elif isinstance(axis, (int, numpy.integer)):
+    elif isinstance(axis, (integer_types, numpy.integer)):
         axis = [axis]
     elif isinstance(axis, numpy.ndarray) and axis.ndim == 0:
         axis = [int(axis)]
@@ -3225,10 +3225,13 @@ def minimum(x, y):
 
 def div_proxy(x, y):
     """Proxy for either true_div or int_div, depending on types of x, y."""
-    f = eval('%s_div' % scal.int_or_true_div(
+    f = scal.int_or_true_div(
         as_tensor_variable(x).dtype in discrete_dtypes,
-        as_tensor_variable(y).dtype in discrete_dtypes))
-    return f(x, y)
+        as_tensor_variable(y).dtype in discrete_dtypes)
+    if f is scal.int_div:
+        return int_div(x, y)
+    else:
+        return true_div(x, y)
 
 
 def divmod(x, y):
@@ -3766,7 +3769,7 @@ class Join(Op):
                 as_tensor_variable_args[0].type.broadcastable)
             ndim = len(bcastable)
             # Axis can also be a constant
-            if not isinstance(axis, int):
+            if not isinstance(axis, integer_types):
                 try:
                     # Note : `get_scalar_constant_value` returns a ndarray not
                     # an int
@@ -3774,7 +3777,7 @@ class Join(Op):
 
                 except NotScalarConstantError:
                     pass
-            if isinstance(axis, int):
+            if isinstance(axis, integer_types):
                 # Basically, broadcastable -> length 1, but the
                 # converse does not hold. So we permit e.g. T/F/T
                 # joins, and if they fail at runtime they fail, but if
@@ -6238,6 +6241,13 @@ class AllocEmpty(gof.Op):
         # The outut can contain nan/inf.  output.type is a new
         # instance, so we can do this only for that variable.
         output.type.filter_checks_isfinite = False
+
+        # We can't reuse filter_checks_isfinite as by default it is
+        # False and it is set to true only in DebugMode.
+        # We can't set it in the type as other make_node can reuse the type.
+        # We can't set it in the variable as it isn't copied when we copy
+        # the variale. So we set it in the tag.
+        output.tag.nan_guard_mode_check = False
         return Apply(self, shape, [output])
 
     def debug_perform(self, node, inputs, out_):

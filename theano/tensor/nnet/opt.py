@@ -4,6 +4,7 @@ Optimizations addressing the ops in nnet root directory
 
 import theano
 from theano import compile, gof
+from theano.compile import optdb
 from theano.gof import local_optimizer
 
 from theano.tensor.nnet.corr import (
@@ -20,6 +21,7 @@ from theano.tensor.nnet.abstract_conv import get_conv_output_shape
 from theano.tensor.opt import (copy_stack_trace,
                                register_specialize_device)
 from theano.tensor import TensorType
+from theano.tensor import opt
 
 # Cpu implementation
 from theano.tensor.nnet.conv import conv2d, ConvOp
@@ -34,6 +36,7 @@ def local_inplace_sparse_block_gemv(node):
     """
     if isinstance(node.op, SparseBlockGemv) and not node.op.inplace:
         new_node = sparse_block_gemv_inplace(*node.inputs)
+        copy_stack_trace(node.outputs[0], new_node)
         return [new_node]
     return False
 compile.optdb.register('local_inplace_sparse_block_gemv',
@@ -50,6 +53,7 @@ def local_inplace_sparse_block_outer(node):
     """
     if isinstance(node.op, SparseBlockOuter) and not node.op.inplace:
         new_node = sparse_block_outer_inplace(*node.inputs)
+        copy_stack_trace(node.outputs[0], new_node)
         return [new_node]
     return False
 compile.optdb.register('local_inplace_sparse_block_outer',
@@ -379,3 +383,25 @@ conv_groupopt.register('local_conv2d_gradweight_cpu',
 conv_groupopt.register('local_conv2d_gradinputs_cpu',
                        local_conv2d_gradinputs_cpu, 40,
                        'fast_compile', 'fast_run')
+
+
+# Verify that no AbstractConv are present in the graph
+@local_optimizer([AbstractConv2d,
+                  AbstractConv2d_gradWeights,
+                  AbstractConv2d_gradInputs])
+def local_abstractconv_check(node):
+    if isinstance(node.op, (AbstractConv2d,
+                            AbstractConv2d_gradWeights,
+                            AbstractConv2d_gradInputs)):
+        raise AssertionError(
+            '%s Theano optimization failed: there is no implementation '
+            'available supporting the requested options. Did you exclude '
+            'both "conv_dnn" and "conv_gemm" from the optimizer? If on GPU, '
+            'is cuDNN available and does the GPU support it? If on CPU, '
+            'do you have a BLAS library installed Theano can link against?' %
+            node.op.__class__.__name__)
+
+optdb.register('AbstractConvCheck',
+               opt.in2out(local_abstractconv_check,
+                          name="AbstractConvCheck"),
+               48.7, 'fast_compile', 'fast_run')

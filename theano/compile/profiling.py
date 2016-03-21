@@ -29,7 +29,6 @@ import numpy
 import theano
 from six import iteritems
 from theano.gof import graph
-from theano.configparser import AddConfigVar, BoolParam, IntParam, StrParam
 
 theano_imported_time = time.time()
 config = theano.config
@@ -1345,6 +1344,16 @@ class ProfileStats(object):
                     print("     - MRG_RandomStreams is the only random number"
                           " generator supported on the GPU.", file = file)
                 break
+
+        # tip 6
+        for a in self.apply_time:
+            node = a
+            if (isinstance(node.op, T.Dot) and
+                len(set(i.dtype for i in node.inputs)) != 1):
+                print("  - You have a dot operation that has different dtype "
+                      " for inputs (%s). Make sure that the inputs have same "
+                      " dtype." % [i.type for i in node.inputs], file = file)
+                printed_tip = True
 
         if not printed_tip:
             print("  Sorry, no tip for today.", file = file)

@@ -14,8 +14,7 @@ from theano.compile import optdb
 from theano.gof import EquilibriumDB, SequenceDB
 from theano.gof.cmodule import get_lib_extension
 from theano.gof.compilelock import get_lock, release_lock
-from theano.configparser import (
-    config, AddConfigVar, BoolParam, FloatParam, StrParam)
+from theano import config
 from . import nvcc_compiler
 
 from theano.tensor.basic import register_transfer
@@ -166,7 +165,6 @@ if compile_cuda_ndarray and cuda_available:
                             os.makedirs(tmpdir)
                     compiler = nvcc_compiler.NVCC_compiler()
                     preargs = ['-O3'] + compiler.compile_args()
-                    preargs += [f for f in config.nvcc.flags.split(' ') if f]
                     compiler.compile_str(
                             'cuda_ndarray',
                             code,
@@ -355,8 +353,17 @@ class DnnVersion(GpuOp):
     def c_headers(self):
         return ['cudnn.h']
 
+    def c_header_dirs(self):
+        return [config.dnn.include_path]
+
     def c_libraries(self):
         return ['cudnn']
+
+    def c_lib_dirs(self):
+        return [config.dnn.library_path]
+
+    def c_compile_args(self):
+        return ['-Wl,-rpath,' + config.dnn.library_path]
 
     def c_support_code(self):
         return """
@@ -565,20 +572,21 @@ def use(device,
                     if config.lib.cnmem > 1:
                         cnmem_enabled = "enabled with initial size: %d MB" % config.lib.cnmem
                     else:
-                        cnmem = min(config.lib.cnmem, 0.98)
-                        cnmem_enabled = "enabled with initial size: %.2f%% of memory" % cnmem
+                        cnmem = min(config.lib.cnmem, 0.98) * 100
+                        cnmem_enabled = "enabled with initial size: %.1f%% of memory" % cnmem
                 else:
                     cnmem_enabled = "disabled"
                 cudnn_version = "not available"
                 warn = None
                 try:
-                    (hdr_v, runtime_v) = dnn_version()
-                    cudnn_version = runtime_v
-                    # 4100 should not print warning with cudnn 4 final.
-                    if cudnn_version > 4100:
-                        warn = ("Your CuDNN version is more recent then Theano."
-                                " If you see problems, try updating Theano or"
-                                " downgrading CuDNN to version 4.")
+                    if dnn_available():
+                        (hdr_v, runtime_v) = dnn_version()
+                        cudnn_version = runtime_v
+                        # 4100 should not print warning with cudnn 4 final.
+                        if cudnn_version > 4100:
+                            warn = ("Your CuDNN version is more recent then Theano."
+                                    " If you see problems, try updating Theano or"
+                                    " downgrading CuDNN to version 4.")
                 except Exception:
                     pass
                 print("Using gpu device %d: %s (CNMeM is %s, CuDNN %s)" % (

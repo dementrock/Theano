@@ -1,6 +1,8 @@
 import os
-import numpy
 import warnings
+
+import numpy
+from six import integer_types
 
 import theano
 from theano import Op, Apply, tensor, config, Variable
@@ -171,6 +173,9 @@ class DnnBase(COp):
     def c_lib_dirs(self):
         return [config.dnn.library_path]
 
+    def c_compile_args(self):
+        return ['-Wl,-rpath,' + config.dnn.library_path]
+
     def c_code_cache_version(self):
         return (super(DnnBase, self).c_code_cache_version(), version())
 
@@ -189,6 +194,9 @@ class DnnVersion(Op):
 
     def c_lib_dirs(self):
         return [config.dnn.library_path]
+
+    def c_compile_args(self):
+        return ['-Wl,-rpath,' + config.dnn.library_path]
 
     def c_support_code(self):
         return """
@@ -275,7 +283,7 @@ class GpuDnnConvDesc(COp):
                  precision="float32"):
         COp.__init__(self, ["conv_desc.c"], "APPLY_SPECIFIC(conv_desc)")
 
-        if isinstance(border_mode, int):
+        if isinstance(border_mode, integer_types):
             border_mode = (border_mode,) * len(subsample)
         if isinstance(border_mode, tuple):
             assert len(border_mode) == len(subsample)
@@ -299,9 +307,16 @@ class GpuDnnConvDesc(COp):
         if kern_shape.type.ndim != 1 or kern_shape.type.dtype != 'int64':
             raise TypeError('kern must be 1D shape tensor')
 
-        return Apply(self, [kern_shape],
+        node = Apply(self, [kern_shape],
                      [CDataType("cudnnConvolutionDescriptor_t",
                                 freefunc="cudnnDestroyConvolutionDescriptor")()])
+        # DebugMode cannot compare the values of CDataType variables, so by
+        # default it returns False all the time. To prevent DebugMode from
+        # complaining because of the MergeOptimizer, we make this variable
+        # always compare to True.
+        out = node.outputs[0]
+        out.tag.values_eq_approx = tensor.type.values_eq_approx_always_true
+        return node
 
     def get_op_params(self):
         pad0 = '0'
@@ -990,9 +1005,16 @@ class GpuDnnPoolDesc(Op):
             self.pad = (0, 0)
 
     def make_node(self):
-        return Apply(self, [],
+        node = Apply(self, [],
                      [CDataType("cudnnPoolingDescriptor_t",
                                 freefunc="cudnnDestroyPoolingDescriptor")()])
+        # DebugMode cannot compare the values of CDataType variables, so by
+        # default it returns False all the time. To prevent DebugMode from
+        # complaining because of the MergeOptimizer, we make this variable
+        # always compare to True.
+        out = node.outputs[0]
+        out.tag.values_eq_approx = tensor.type.values_eq_approx_always_true
+        return node
 
     def c_code(self, node, name, inputs, outputs, sub):
         desc, = outputs

@@ -2118,12 +2118,14 @@ class GCC_compiler(Compiler):
             libs = []
         if preargs is None:
             preargs = []
-        else:
-            preargs = list(preargs)
+
+        # Remove empty string directory
+        include_dirs = [d for d in include_dirs if d]
+        lib_dirs = [d for d in lib_dirs if d]
 
         include_dirs = include_dirs + std_include_dirs()
-        libs = std_libs() + libs
-        lib_dirs = std_lib_dirs() + lib_dirs
+        libs = libs + std_libs()
+        lib_dirs = lib_dirs + std_lib_dirs()
 
         cppfilename = os.path.join(location, 'mod.cpp')
         with open(cppfilename, 'w') as cppfile:

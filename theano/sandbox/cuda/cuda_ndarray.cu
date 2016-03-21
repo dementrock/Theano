@@ -3244,10 +3244,10 @@ CudaNdarray_gpu_init(PyObject* _unused, PyObject* args)
         if (cnmem > 1)
             mem = cnmem * 1024 * 1024;
         else{
-            // Clip to 98% to let memory for the driver.
-            // 98.5% didn't worked in some cases.
-            if (cnmem > .98){
-                cnmem = .98;
+            // Clip to 95% to let memory for the driver.
+            // 98% didn't worked in some cases.
+            if (cnmem > .95){
+                cnmem = .95;
             }
             size_t free = 0, total = 0;
             cudaError_t err = cudaMemGetInfo(&free, &total);
@@ -3800,9 +3800,11 @@ CudaNdarray_CopyFromArray(CudaNdarray * self, PyArrayObject*obj)
     {
         PyErr_Format(PyExc_RuntimeError,
                      "Cuda error '%s' while copying %lli data element"
-                     " to device memory",
+                     " to device memory. str ptr=%p. dst ptr=%p",
                      cudaGetErrorString(cerr),
-                     (long long)py_src_size);
+                     (long long)py_src_size,
+                     py_src_data,
+                     self->devdata);
         Py_DECREF(py_src);
         return -1;
     }

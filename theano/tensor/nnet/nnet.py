@@ -736,6 +736,8 @@ class LogSoftmax(gof.Op):
 logsoftmax_op = LogSoftmax()
 
 
+# This is not registered in stabilize, as it cause some crossentropy
+# optimization to not be inserted.
 @opt.register_specialize('stabilize', 'fast_compile')
 @gof.local_optimizer([tensor.Elemwise])
 def local_logsoftmax(node):
@@ -752,10 +754,13 @@ def local_logsoftmax(node):
         inVars = node.inputs[0].owner.inputs[0]
         new_op = LogSoftmax()
         ret = new_op(inVars)
-        ret.tag.values_eq_approx = values_eq_approx_remove_inf
+        ret .tag.values_eq_approx = values_eq_approx_remove_inf
+        copy_stack_trace([node.inputs[0], node.outputs[0]], ret)
         return [ret]
 
 
+# This is not registered in stabilize, as it cause some crossentropy
+# optimization to not be inserted.
 @opt.register_specialize('stabilize', 'fast_compile')
 @gof.local_optimizer([SoftmaxGrad])
 def local_logsoftmax_grad(node):
@@ -785,9 +790,9 @@ def local_logsoftmax_grad(node):
         grads = node.inputs[0].owner.inputs[0]
         if grads.broadcastable[1] and not sm.broadcastable[1]:
             grads = tensor.alloc(grads, grads.shape[0], sm.shape[1])
-
         ret = grads - tensor.sum(grads, axis=1, keepdims=True) * sm
         ret.tag.values_eq_approx = values_eq_approx_remove_nan
+        copy_stack_trace(node.outputs[0], ret)
         return [ret]
 
 
@@ -2302,7 +2307,7 @@ def h_softmax(x, batch_size, n_outputs, n_classes, n_outputs_per_class,
         output_probs = theano.tensor.nnet.softmax(
             activations.reshape((-1, n_outputs_per_class)))
         output_probs = output_probs.reshape((batch_size, n_classes, -1))
-        output_probs = class_probs[:, :, None] * output_probs
+        output_probs = class_probs.dimshuffle(0, 1, 'x') * output_probs
         output_probs = output_probs.reshape((batch_size, -1))
         # output_probs.shape[1] is n_classes * n_outputs_per_class, which might
         # be greater than n_outputs, so we ignore the potential irrelevant
@@ -2321,11 +2326,11 @@ def h_softmax(x, batch_size, n_outputs, n_classes, n_outputs_per_class,
 
         # Second softmax that computes the output probabilities
         activations = sparse_block_dot(
-            W2[None, :, :, :], x[:, None, :],
+            W2.dimshuffle('x', 0, 1, 2), x.dimshuffle(0, 'x', 1),
             tensor.zeros((batch_size, 1), dtype='int32'), b2,
-            target_classes[:, None])
+            target_classes.dimshuffle(0, 'x'))
 
-        output_probs = theano.tensor.nnet.softmax(activations[:, 0, :])
+        output_probs = theano.tensor.nnet.softmax(activations.dimshuffle(0, 2))
         target_class_probs = class_probs[tensor.arange(batch_size),
                                          target_classes]
         output_probs = output_probs[tensor.arange(batch_size),
