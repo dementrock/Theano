@@ -1,3 +1,4 @@
+from __future__ import absolute_import, print_function, division
 import errno
 import os
 import sys
@@ -1039,6 +1040,13 @@ AddConfigVar('profiling.destination',
 AddConfigVar('profiling.debugprint',
              """
              Do a debugprint of the profiled functions
+             """,
+             BoolParam(False),
+             in_c_key=False)
+
+AddConfigVar('profiling.ignore_first_call',
+             """
+             Do we ignore the first call of a Theano function.
              """,
              BoolParam(False),
              in_c_key=False)
